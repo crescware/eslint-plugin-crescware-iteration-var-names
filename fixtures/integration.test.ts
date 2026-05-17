@@ -59,6 +59,11 @@ describe("OK fixtures produce no false positives", () => {
     "ok-computed.ts",
     "ok-chained-siblings.ts",
     "ok-nested-3-levels.ts",
+    "ok-for-classic.ts",
+    "ok-for-of.ts",
+    "ok-for-in.ts",
+    "ok-for-destructure.ts",
+    "ok-for-meaningful.ts",
   ])("%s", (file) => {
     expect(messagesFor(file)).toEqual([]);
   });
@@ -141,6 +146,55 @@ describe("NG fixtures match exactly", () => {
   test("ng-outer-named-v.ts", () => {
     expect(messagesFor("ng-outer-named-v.ts")).toEqual([
       "Avoid the single-character name 'v' on an outer Array.prototype.map callback; use a meaningful name with 2 or more characters.",
+    ]);
+  });
+
+  test("ng-for-classic-inner.ts", () => {
+    expect(messagesFor("ng-for-classic-inner.ts")).toEqual([
+      "for loop variable 'x' is not allowed; use 'k', 'v', 'i' or a meaningful name with 2 or more characters.",
+    ]);
+  });
+
+  test("ng-for-classic-multi-decl.ts (i allowed, j flagged)", () => {
+    expect(messagesFor("ng-for-classic-multi-decl.ts")).toEqual([
+      "for loop variable 'j' is not allowed; use 'k', 'v', 'i' or a meaningful name with 2 or more characters.",
+    ]);
+  });
+
+  test("ng-for-of-inner.ts", () => {
+    expect(messagesFor("ng-for-of-inner.ts")).toEqual([
+      "for-of loop variable 'x' is not allowed; use 'k', 'v', 'i' or a meaningful name with 2 or more characters.",
+    ]);
+  });
+
+  test("ng-for-in-inner.ts", () => {
+    expect(messagesFor("ng-for-in-inner.ts")).toEqual([
+      "for-in loop variable 'x' is not allowed; use 'k', 'v', 'i' or a meaningful name with 2 or more characters.",
+    ]);
+  });
+
+  test("ng-for-destructure-inner.ts ([k, x] of map: x flagged)", () => {
+    expect(messagesFor("ng-for-destructure-inner.ts")).toEqual([
+      "for-of loop variable 'x' is not allowed; use 'k', 'v', 'i' or a meaningful name with 2 or more characters.",
+    ]);
+  });
+
+  test("ng-for-nested-outer.ts (inner j flagged, outer i flagged)", () => {
+    expect(messagesFor("ng-for-nested-outer.ts")).toEqual([
+      "for loop variable 'j' is not allowed; use 'k', 'v', 'i' or a meaningful name with 2 or more characters.",
+      "Avoid the single-character name 'i' on an outer for loop; use a meaningful name with 2 or more characters.",
+    ]);
+  });
+
+  test("ng-mixed-map-in-for.ts (outer for becomes outer due to inner forEach)", () => {
+    expect(messagesFor("ng-mixed-map-in-for.ts")).toEqual([
+      "Avoid the single-character name 'i' on an outer for loop; use a meaningful name with 2 or more characters.",
+    ]);
+  });
+
+  test("ng-mixed-for-in-map.ts (outer map becomes outer due to inner for-of)", () => {
+    expect(messagesFor("ng-mixed-for-in-map.ts")).toEqual([
+      "Avoid the single-character name 'r' on an outer Array.prototype.map callback; use a meaningful name with 2 or more characters.",
     ]);
   });
 });

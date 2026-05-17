@@ -5,6 +5,26 @@ type Identifier = { type: "Identifier"; name: string; loc?: Loc };
 
 type Param = { type: string; loc?: Loc; name?: string };
 
+type Pattern = {
+  type: string;
+  name?: string;
+  elements?: (Pattern | null)[];
+  properties?: ObjectPatternProperty[];
+  argument?: Pattern;
+  left?: Pattern;
+  value?: Pattern;
+};
+
+type ObjectPatternProperty =
+  | { type: "Property"; value: Pattern; key?: unknown }
+  | { type: "RestElement"; argument: Pattern };
+
+type VariableDeclarator = { type: "VariableDeclarator"; id: Pattern };
+type VariableDeclaration = {
+  type: "VariableDeclaration";
+  declarations: VariableDeclarator[];
+};
+
 type FunctionLike = {
   type: "ArrowFunctionExpression" | "FunctionExpression";
   async?: boolean;
@@ -19,6 +39,15 @@ type CallExpression = {
     property?: { type: string; name?: string };
   };
   arguments: { type: string; async?: boolean; params?: Param[] }[];
+};
+
+type ForStatement = {
+  type: "ForStatement";
+  init: VariableDeclaration | null | { type: string };
+};
+type ForOfOrInStatement = {
+  type: "ForOfStatement" | "ForInStatement";
+  left: VariableDeclaration | Pattern;
 };
 
 type ReportDescriptor = { message: string; node: unknown };
@@ -49,7 +78,19 @@ const TARGET_METHODS = new Set([
 
 type MethodKind = "reduce-sync" | "reduce-async" | "sort" | "iterator";
 
-type Frame = { kind: MethodKind; methodName: string; hasNested: boolean };
+const FOR_ALLOWED_INNER = new Set(["k", "v", "i"]);
+
+type ArrayCallbackFrame = {
+  kind: "array-callback";
+  methodKind: MethodKind;
+  methodName: string;
+  hasNested: boolean;
+};
+type ForFrame = {
+  kind: "for" | "for-of" | "for-in";
+  hasNested: boolean;
+};
+type IterationFrame = ArrayCallbackFrame | ForFrame;
 
 const expectedNamesFor = (kind: MethodKind): readonly string[] => {
   switch (kind) {
@@ -121,26 +162,100 @@ const isIdentifier = (node: Param | undefined): node is Identifier => {
   );
 };
 
+const collectPatternIdentifiers = (node: Pattern | null): Identifier[] => {
+  if (node === null) {
+    return [];
+  }
+  switch (node.type) {
+    case "Identifier":
+      if (typeof node.name !== "string") {
+        return [];
+      }
+      return [node as Identifier];
+    case "ArrayPattern":
+      return (node.elements ?? []).flatMap((el) =>
+        collectPatternIdentifiers(el),
+      );
+    case "ObjectPattern":
+      return (node.properties ?? []).flatMap((v) => {
+        if (v.type === "Property") {
+          return collectPatternIdentifiers(v.value);
+        }
+        if (v.type === "RestElement") {
+          return collectPatternIdentifiers(v.argument);
+        }
+        return [];
+      });
+    case "RestElement":
+      return collectPatternIdentifiers(node.argument ?? null);
+    case "AssignmentPattern":
+      return collectPatternIdentifiers(node.left ?? null);
+    default:
+      return [];
+  }
+};
+
+const collectForLoopVarIdentifiers = (
+  node: ForStatement | ForOfOrInStatement,
+): Identifier[] => {
+  if (node.type === "ForStatement") {
+    const init = node.init;
+    if (init === null || init === undefined) {
+      return [];
+    }
+    if ((init as { type: string }).type !== "VariableDeclaration") {
+      return [];
+    }
+    const decl = init as VariableDeclaration;
+    return decl.declarations.flatMap((v) => collectPatternIdentifiers(v.id));
+  }
+  const left = node.left;
+  if ((left as { type: string }).type === "VariableDeclaration") {
+    const decl = left as VariableDeclaration;
+    return decl.declarations.flatMap((v) => collectPatternIdentifiers(v.id));
+  }
+  return [];
+};
+
+const forKindOf = (
+  node: ForStatement | ForOfOrInStatement,
+): "for" | "for-of" | "for-in" => {
+  if (node.type === "ForOfStatement") {
+    return "for-of";
+  }
+  if (node.type === "ForInStatement") {
+    return "for-in";
+  }
+  return "for";
+};
+
+const outerDescriptorOf = (frame: IterationFrame): string => {
+  if (frame.kind === "array-callback") {
+    return `Array.prototype.${frame.methodName} callback`;
+  }
+  return `${frame.kind} loop`;
+};
+
 const rule: Rule = {
   meta: {
     type: "suggestion",
     docs: {
       description:
-        "Enforce naming convention for Array.prototype callback arguments (v/i/arr, acc, prev, a/b).",
+        "Ban thoughtless single-character variable names in iteration contexts (Array.prototype callbacks, for / for-of / for-in).",
     },
     schema: [],
   },
   create(context) {
-    const callbackStack: Frame[] = [];
-    const callbackToFrame = new WeakMap<object, Frame>();
+    const frameStack: IterationFrame[] = [];
+    const callbackToFrame = new WeakMap<object, ArrayCallbackFrame>();
+    const forNodeToFrame = new WeakMap<object, ForFrame>();
 
-    const reportInner = (
+    const reportInnerArrayCallback = (
       param: Identifier,
-      methodName: string,
-      kind: MethodKind,
+      frame: ArrayCallbackFrame,
       paramIndex: number,
     ) => {
-      const expected = expectedNamesFor(kind)[paramIndex];
+      const expected = expectedNamesFor(frame.methodKind)[paramIndex];
       if (expected === undefined) {
         return;
       }
@@ -151,19 +266,40 @@ const rule: Rule = {
         return;
       }
       context.report({
-        message: `Array.prototype.${methodName} expects '${expected}' for argument ${paramIndex + 1} (got: '${param.name}').`,
+        message: `Array.prototype.${frame.methodName} expects '${expected}' for argument ${paramIndex + 1} (got: '${param.name}').`,
         node: param,
       });
     };
 
-    const reportOuter = (param: Identifier, methodName: string) => {
+    const reportInnerFor = (param: Identifier, frame: ForFrame) => {
       if (param.name.length >= 2) {
         return;
       }
+      if (FOR_ALLOWED_INNER.has(param.name)) {
+        return;
+      }
       context.report({
-        message: `Avoid the single-character name '${param.name}' on an outer Array.prototype.${methodName} callback; use a meaningful name with 2 or more characters.`,
+        message: `${frame.kind} loop variable '${param.name}' is not allowed; use 'k', 'v', 'i' or a meaningful name with 2 or more characters.`,
         node: param,
       });
+    };
+
+    const reportOuter = (param: Identifier, frame: IterationFrame) => {
+      if (param.name.length >= 2) {
+        return;
+      }
+      const descriptor = outerDescriptorOf(frame);
+      context.report({
+        message: `Avoid the single-character name '${param.name}' on an outer ${descriptor}; use a meaningful name with 2 or more characters.`,
+        node: param,
+      });
+    };
+
+    const markParentHasNested = () => {
+      const top = frameStack[frameStack.length - 1];
+      if (top !== undefined) {
+        top.hasNested = true;
+      }
     };
 
     const onCallEnter = (node: CallExpression) => {
@@ -175,16 +311,18 @@ const rule: Rule = {
       if (callback === null) {
         return;
       }
-      const kind = methodKindOf(methodName, callback.async === true);
-      if (kind === null) {
+      const methodKind = methodKindOf(methodName, callback.async === true);
+      if (methodKind === null) {
         return;
       }
-      const frame: Frame = { kind, methodName, hasNested: false };
+      const frame: ArrayCallbackFrame = {
+        kind: "array-callback",
+        methodKind,
+        methodName,
+        hasNested: false,
+      };
       callbackToFrame.set(callback as unknown as object, frame);
-      const top = callbackStack[callbackStack.length - 1];
-      if (top !== undefined) {
-        top.hasNested = true;
-      }
+      markParentHasNested();
     };
 
     const onFunctionEnter = (node: FunctionLike) => {
@@ -192,7 +330,7 @@ const rule: Rule = {
       if (frame === undefined) {
         return;
       }
-      callbackStack.push(frame);
+      frameStack.push(frame);
     };
 
     const onFunctionExit = (node: FunctionLike) => {
@@ -200,11 +338,11 @@ const rule: Rule = {
       if (frame === undefined) {
         return;
       }
-      const popped = callbackStack.pop();
+      const popped = frameStack.pop();
       if (popped !== frame) {
         return;
       }
-      const expected = expectedNamesFor(frame.kind);
+      const expected = expectedNamesFor(frame.methodKind);
       const params = node.params;
       const limit = Math.min(params.length, expected.length);
 
@@ -214,9 +352,38 @@ const rule: Rule = {
           continue;
         }
         if (frame.hasNested) {
-          reportOuter(param, frame.methodName);
+          reportOuter(param, frame);
         } else {
-          reportInner(param, frame.methodName, frame.kind, i);
+          reportInnerArrayCallback(param, frame, i);
+        }
+      }
+    };
+
+    const onForEnter = (node: ForStatement | ForOfOrInStatement) => {
+      const frame: ForFrame = {
+        kind: forKindOf(node),
+        hasNested: false,
+      };
+      markParentHasNested();
+      frameStack.push(frame);
+      forNodeToFrame.set(node as unknown as object, frame);
+    };
+
+    const onForExit = (node: ForStatement | ForOfOrInStatement) => {
+      const frame = forNodeToFrame.get(node as unknown as object);
+      if (frame === undefined) {
+        return;
+      }
+      const popped = frameStack.pop();
+      if (popped !== frame) {
+        return;
+      }
+      const params = collectForLoopVarIdentifiers(node);
+      for (const param of params) {
+        if (frame.hasNested) {
+          reportOuter(param, frame);
+        } else {
+          reportInnerFor(param, frame);
         }
       }
     };
@@ -233,6 +400,12 @@ const rule: Rule = {
       "FunctionExpression:exit": onFunctionExit as unknown as (
         node: never,
       ) => void,
+      ForStatement: onForEnter as unknown as (node: never) => void,
+      "ForStatement:exit": onForExit as unknown as (node: never) => void,
+      ForOfStatement: onForEnter as unknown as (node: never) => void,
+      "ForOfStatement:exit": onForExit as unknown as (node: never) => void,
+      ForInStatement: onForEnter as unknown as (node: never) => void,
+      "ForInStatement:exit": onForExit as unknown as (node: never) => void,
     };
   },
 };
@@ -240,7 +413,7 @@ const rule: Rule = {
 const plugin = {
   meta: { name: "crescware-iteration-var-names" },
   rules: {
-    "array-callback-arg-names": rule,
+    "iteration-var-names": rule,
   },
 };
 

@@ -17,7 +17,7 @@
     "eslint/eqeqeq": "error",
     "typescript/consistent-type-imports": "error",
     "eslint/curly": "error",
-    "crescware-iteration-var-names/array-callback-arg-names": "error"
+    "crescware-iteration-var-names/iteration-var-names": "error"
   },
   "ignorePatterns": ["fixtures/**"]
 }

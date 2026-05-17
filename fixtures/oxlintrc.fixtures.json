@@ -11,6 +11,6 @@
   },
   "jsPlugins": ["../src/index.ts"],
   "rules": {
-    "crescware-iteration-var-names/array-callback-arg-names": "error"
+    "crescware-iteration-var-names/iteration-var-names": "error"
   }
 }
