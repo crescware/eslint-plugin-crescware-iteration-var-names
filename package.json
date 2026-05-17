@@ -1,6 +1,6 @@
 {
   "name": "@crescware/eslint-plugin-crescware-iteration-var-names",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "files": [
     "dist"
   ],
