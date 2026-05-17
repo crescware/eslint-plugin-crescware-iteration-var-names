@@ -238,7 +238,7 @@ const rule: Rule = {
 };
 
 const plugin = {
-  meta: { name: "crescware-array-callback-arg-names" },
+  meta: { name: "crescware-iteration-var-names" },
   rules: {
     "array-callback-arg-names": rule,
   },

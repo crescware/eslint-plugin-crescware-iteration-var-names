@@ -1,6 +1,6 @@
-# template
+# @crescware/eslint-plugin-crescware-iteration-var-names
 
-TypeScript project template.
+ESLint plugin that bans thoughtless single-character variables in iteration contexts.
 
 ## Stack
 
